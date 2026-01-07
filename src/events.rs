@@ -1,13 +1,13 @@
-use crate::bot::MyBot;
+use crate::{bot::MyBot, irc_name::IrcName};
 use std::error::Error;
 use regex::Regex;
 use crate::pp_calculator::PPCalculator;
 use std::path::Path;
 
 
-pub async fn handle_event(bot: &mut MyBot, sender:&str, msg: &str) -> Result<(), Box<dyn Error>> {
+pub async fn handle_event(bot: &mut MyBot, sender: &IrcName, msg: &str) -> Result<(), Box<dyn Error>> {
     // 如果不是 BanchoBot 的消息，直接忽略
-    if sender != "BanchoBot" {
+    if ! sender.eq_raw("BanchoBot") {
         return Ok(());
     }
     
@@ -155,7 +155,7 @@ async fn handle_match_finish(bot: &mut MyBot) -> Result<(), Box<dyn Error>> {
         bot.rotate_host().await?;
     }
      // 这里实现参考下文的房主退出逻辑的补足
-    if !bot.player_list.contains(&bot.room_host) {
+    if !bot.player_list.contains(&IrcName::new(&bot.room_host)) {
         bot.rotate_host().await?
     }
     bot.send_queue().await?;
@@ -172,7 +172,7 @@ async fn handle_match_abort(bot: &mut MyBot) -> Result<(), Box<dyn Error>> {
         bot.rotate_host().await?;
     }
     // 这里实现参考下文的房主退出逻辑的补足
-    if !bot.player_list.contains(&bot.room_host) {
+    if !bot.player_list.contains(&IrcName::new(&bot.room_host)) {
         bot.rotate_host().await?
     }
     bot.send_queue().await?;

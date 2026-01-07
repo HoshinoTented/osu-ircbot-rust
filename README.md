@@ -69,6 +69,8 @@ help(!h) 查看帮助 |
 1. 确保你已经安装了 Rust 和 Cargo。
 2. 克隆这个仓库。
 3. 创建一个 `.env` 文件，并填写以下配置：
+   > 注意将 IRC_NICKNAME 用户名中的所有空格替换成下划线
+   > ROOM_NAME 和 ROOM_PASSWORD 如果包含空格则需要使用引号 '"'
    ```
    OSU_CLIENT_ID=203xx
    OSU_CLIENT_SECRET=4xxxxxxxxxxxx

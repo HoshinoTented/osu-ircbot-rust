@@ -1,8 +1,8 @@
-use crate::{bot::MyBot, osu_api::UserScore, osu_api::RecentScoreResponse};
+use crate::{bot::MyBot, irc_name::IrcName, osu_api::{RecentScoreResponse, UserScore}};
 use std::error::Error;
 use crate::charts::{Chart, ChartQuery};
 
-pub async fn handle_command(bot: &mut MyBot, sender: &str,target: &str, msg: &str, prefix: Option<String>) -> Result<(), Box<dyn Error>> {
+pub async fn handle_command(bot: &mut MyBot, sender: &IrcName, target: &str, msg: &str, prefix: Option<IrcName>) -> Result<(), Box<dyn Error>> {
     let mut split = msg.splitn(2, char::is_whitespace); // 只分割一次
     let mut command = split.next().unwrap_or("").to_lowercase();
     let raw_args = split.next().unwrap_or("").trim();
@@ -17,10 +17,10 @@ pub async fn handle_command(bot: &mut MyBot, sender: &str,target: &str, msg: &st
             bot.send_beatmap_info().await?;
         }
         "!pick"=> {
-            if sender == bot.room_host{
+            if sender.eq(&bot.room_host) {
                 handle_pick(bot, target,raw_args).await?;
             }
-            else { 
+            else {
                 bot.send_message(target,"只有房主才能选歌哦").await?;
             }
         }
@@ -55,6 +55,7 @@ pub async fn handle_command(bot: &mut MyBot, sender: &str,target: &str, msg: &st
             handle_recent_score(bot, target, &irc_name, true).await?;
         }
         "!s" => {
+            // FIXME: ?? get twice ??
             let user_id = bot.get_user_mut(&irc_name).await.unwrap().id.clone();
             let username = bot.get_user_mut(&irc_name).await.unwrap().username.clone();
             let beatmap_id = bot.beatmap_id;
@@ -94,7 +95,7 @@ async fn handle_pick(bot: &mut MyBot, target: &str,parms:&str) -> Result<(), Box
     Ok(())
 }
 
-async fn handle_recent_score(bot: &mut MyBot, target: &str, irc_name: &str, include_fails: bool) -> Result<(), Box<dyn Error>> {
+async fn handle_recent_score(bot: &mut MyBot, target: &str, irc_name: &IrcName, include_fails: bool) -> Result<(), Box<dyn Error>> {
     let user_id = bot.get_user_mut(irc_name).await.unwrap().id.clone();
     let username = bot.get_user_mut(irc_name).await.unwrap().username.clone();
 

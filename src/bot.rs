@@ -1,7 +1,6 @@
+use crate::irc_name::IrcName;
 use crate::{pp_calculator, BotSettings};
 use crate::osu_api::{self, User};
-
-use crate::charts;
 
 use irc::client::prelude::*;
 
@@ -35,11 +34,12 @@ struct BotState {
 pub struct MyBot {
     client: Client,
     pub chart_db :ChartDatabase,
-    pub bot_name: String,
-    pub player_list: Vec<String>,
+    pub bot_name: IrcName,
+    pub player_list: Vec<IrcName>,
     pub room_host_list: Vec<String>,
     pub beatmap_start_time: Option<Instant>,
     pub beatmap_end_time: Option<Instant>,
+    // TODO: 考虑将这些投票列表也换成 Vec<IrcName>, 或者是搞一个专门的结构
     pub approved_abort_list: Vec<String>,
     pub approved_start_list: Vec<String>,
     pub approved_skip_list: Vec<String>,
@@ -53,7 +53,7 @@ pub struct MyBot {
     pub beatmap_path: String,
     pub pp_calculator: PPCalculator,
     pub osu_api: OsuApi,
-    pub player_info: HashMap<String, User>,
+    pub player_info: HashMap<IrcName, User>,
     pub beatmap_title_unicode: String,
     pub beatmap_artist_unicode: String,
     pub beatmap_difficulty_rating: f32,
@@ -74,7 +74,7 @@ impl MyBot {
         let bot = MyBot {
             client,
             chart_db: ChartDatabase::open("charts.sqlite").unwrap(),
-            bot_name: nickname.unwrap(),
+            bot_name: IrcName::new(nickname.unwrap()),
             player_list: Vec::new(),
             room_host_list: Vec::new(),
             beatmap_start_time: None,
@@ -153,8 +153,8 @@ impl MyBot {
     async fn handle_message(&mut self, message: Message) -> Result<(), Box<dyn Error>> {
         match &message.command {
             Command::PRIVMSG(target, msg) => {
-                let sender = self.get_nickname(&message.prefix).unwrap_or("unknown".to_string());
-                println!("收到消息: {} <- {} from {}", target, msg,sender);
+                let sender = self.get_nickname(&message.prefix).unwrap_or(IrcName::new("unknown"));
+                println!("收到消息: {} <- {} from {}", target, msg, sender);
                 if msg.contains("Match settings") {
                     self.is_channel_exist = true;
                 }
@@ -163,6 +163,7 @@ impl MyBot {
                 }
                 if msg.starts_with("!") || msg.starts_with("！") {
                     let prefix = self.get_nickname(&message.prefix);
+                    // 看起来 sender 和 prefix 总是相等的
                     handle_command(self, &sender,target, msg, prefix).await?;
                 } else {
                     handle_event(self, &sender, msg).await?;
@@ -223,10 +224,10 @@ impl MyBot {
     }
 
 
-    fn get_nickname(&self, prefix: &Option<Prefix>) -> Option<String> {
+    fn get_nickname(&self, prefix: &Option<Prefix>) -> Option<IrcName> {
         prefix.as_ref().and_then(|p| {
             if let Prefix::Nickname(nick, _, _) = p {
-                Some(nick.to_string())
+                Some(IrcName::new(nick))
             } else {
                 None
             }
@@ -238,22 +239,25 @@ impl MyBot {
     }
 
     pub fn add_player(&mut self, name: String) {
-        if !self.player_list.contains(&name) {
-            self.player_list.push(name.clone());
+        let irc_name = IrcName::new(&name);
+        if !self.player_list.contains(&irc_name) {
+            self.player_list.push(irc_name);
         }
+
         if !self.room_host_list.contains(&name) {
             self.room_host_list.push(name);
         }
     }
 
     pub fn remove_player(&mut self, name: &str) {
-        self.player_list.retain(|n| n != name);
+        let name = IrcName::new(name);
+        self.player_list.retain(|n| n != &name);
     }
 
     pub fn remove_player_not_in_list(&mut self) {
         // 取player_list和room_host_list的交集，更新room_host_list
         self.room_host_list = self.room_host_list.iter()
-            .filter(|player| self.player_list.contains(player))
+            .filter(|player| self.player_list.contains(&IrcName::new(player)))
             .cloned()
             .collect();
     }
@@ -275,7 +279,7 @@ impl MyBot {
         Ok(())
     }
 
-    pub async fn calculate_total_time_left(&self) -> Result<(String), Box<dyn Error>> {
+    pub async fn calculate_total_time_left(&self) -> Result<String, Box<dyn Error>> {
         let now = Instant::now();
         let elapsed = now.duration_since(self.beatmap_start_time.unwrap_or(now));
         if elapsed == Duration::from_secs(0) {
@@ -284,18 +288,23 @@ impl MyBot {
             Ok(msg_not_started)
         }
         else {
-            let total_time_left = self.beatmap_length - elapsed.as_secs();
-            let msg_started = format!("剩余游玩时间: {}s", total_time_left);
-            self.send_message(&format!("#mp_{}", *self.room_id.lock().await),&msg_started).await?;
-            Ok(msg_started)
+            let elapsed = elapsed.as_secs();
+            let msg = if self.beatmap_length > elapsed { 
+                format!("剩余游玩时间: {}s", self.beatmap_length - elapsed)
+            } else {
+                "游戏正在结算".to_string()
+            };
+            self.send_message(&format!("#mp_{}", *self.room_id.lock().await),&msg).await?;
+            Ok(msg)
         }
     }
 
     pub async fn send_welcome(&mut self, player_name: String) -> Result<(), Box<dyn Error>> {
         self.send_message(&format!("#mp_{}", *self.room_id.lock().await),&format!("欢迎{}酱~＼(≧▽≦)／ 输入help获取指令详情", player_name)).await?;
 
-        if self.is_game_started{
+        if self.is_game_started {
             let remain_time_text = self.calculate_total_time_left().await?;
+            // FIXME: send twice? why this is never observed?
             self.send_message(&format!("#mp_{}", *self.room_id.lock().await),&remain_time_text).await?;
         }
 
@@ -368,11 +377,11 @@ impl MyBot {
         Ok(())
     }
 
-    pub async fn get_user_mut(&mut self, irc_name: &str) -> Option<&mut User> {
+    pub async fn get_user_mut(&mut self, irc_name: &IrcName) -> Option<&mut User> {
         if !self.player_info.contains_key(irc_name) {
             let mut user = User::new(irc_name.to_string(), 0, "".to_string());
             user.update(&mut self.osu_api).await.unwrap();
-            self.player_info.insert(irc_name.to_string(), user);
+            self.player_info.insert(irc_name.clone(), user);
         }
         self.player_info.get_mut(irc_name)
     }
@@ -383,16 +392,16 @@ impl MyBot {
         Ok(())
     }
     
-    pub async fn vote_abort(&mut self, irc_name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn vote_abort(&mut self, irc_name: &IrcName) -> Result<(), Box<dyn Error>> {
         // 判断irc_name是否在player_list中
-        if self.player_list.contains(&irc_name.to_string()) {
+        if self.player_list.contains(irc_name) {
             // 如果不在approved_abort_list中，则添加到approved_abort_list中
-            if !self.approved_abort_list.contains(&irc_name.to_string()) {
+            if !self.approved_abort_list.contains(irc_name.inner()) {
                 self.approved_abort_list.push(irc_name.to_string());
             }
 
             // 判断列表是否满足人数的一半 或者是房主本人
-            if self.approved_abort_list.len() >= (self.player_list.len() / 2) || irc_name == self.room_host.replace(" ", "_") {
+            if self.approved_abort_list.len() >= (self.player_list.len() / 2) || irc_name.eq(&self.room_host) {
                 self.abort_game().await?;
                 self.approved_abort_list.clear();
             }
@@ -401,34 +410,32 @@ impl MyBot {
             }
         }
         Ok(())
-            
-        
     }
 
-    pub async fn vote_skip(&mut self, irc_name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn vote_skip(&mut self, irc_name: &IrcName) -> Result<(), Box<dyn Error>> {
         // 判断irc_name是否在player_list中
-        if self.player_list.contains(&irc_name.to_string()) {
-            // 如果不在approved_skip_list中，则添加到approved_skip_list中
-            if !self.approved_skip_list.contains(&irc_name.to_string()) {
-                self.approved_skip_list.push(irc_name.to_string());
+        if self.player_list.contains(irc_name) {
+                // 如果不在approved_skip_list中，则添加到approved_skip_list中
+                if !self.approved_skip_list.contains(irc_name.inner()) {
+                    self.approved_skip_list.push(irc_name.inner().clone());
+                }
+            // 判断列表是否满足人数的一半 或者是房主本人
+            if self.approved_skip_list.len() >= (self.player_list.len() / 2) || irc_name.eq(&self.room_host) {
+                self.rotate_host().await?;
+                self.approved_skip_list.clear();
             }
-        // 判断列表是否满足人数的一半 或者是房主本人
-        if self.approved_skip_list.len() >= (self.player_list.len() / 2) || irc_name == self.room_host.replace(" ", "_") {
-            self.rotate_host().await?;
-            self.approved_skip_list.clear();
+            else {
+                self.send_message(&format!("#mp_{}", *self.room_id.lock().await), &format!("{} / {} in the skip process", self.approved_skip_list.len(), (self.player_list.len() as f64 / 2.0).ceil() as usize)).await?;
+            }
         }
-        else {
-            self.send_message(&format!("#mp_{}", *self.room_id.lock().await), &format!("{} / {} in the skip process", self.approved_skip_list.len(), (self.player_list.len() as f64 / 2.0).ceil() as usize)).await?;
-        }
-    }
         Ok(())
     }
-    pub async fn vote_close(&mut self, irc_name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn vote_close(&mut self, irc_name: &IrcName) -> Result<(), Box<dyn Error>> {
         // 判断irc_name是否在player_list中
-        if self.player_list.contains(&irc_name.to_string()) {
+        if self.player_list.contains(irc_name) {
             // 如果不在approved_close_list中，则添加到approved_close_list中
-            if !self.approved_close_list.contains(&irc_name.to_string()) {
-                self.approved_close_list.push(irc_name.to_string());
+            if !self.approved_close_list.contains(irc_name.inner()) {
+                self.approved_close_list.push(irc_name.inner().clone());
             }
         }
         // 判断列表是否满足人数的一半
@@ -441,12 +448,12 @@ impl MyBot {
         }
         Ok(())
     }
-    pub async fn vote_start(&mut self, irc_name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn vote_start(&mut self, irc_name: &IrcName) -> Result<(), Box<dyn Error>> {
         // 判断irc_name是否在player_list中
-        if self.player_list.contains(&irc_name.to_string()) {
+        if self.player_list.contains(irc_name) {
             // 如果不在approved_start_list中，则添加到approved_start_list中
-            if !self.approved_start_list.contains(&irc_name.to_string()) {
-                self.approved_start_list.push(irc_name.to_string());
+            if !self.approved_start_list.contains(irc_name.inner()) {
+                self.approved_start_list.push(irc_name.inner().clone());
             }
         }
         // 判断列表是否满足人数的一半
@@ -473,9 +480,9 @@ impl MyBot {
             beatmap_name: self.beatmap_title_unicode.clone(),
             beatmap_artist: self.beatmap_artist_unicode.clone(),
             beatmap_star: self.beatmap_difficulty_rating,
-            player_list: self.player_list.clone()
+            player_list: self.player_list.iter().map(|n| n.inner().clone()).collect()
         };
-        let mut file = File::create("bot_state.json")?;
+        let file = File::create("bot_state.json")?;
         serde_json::to_writer_pretty(&file, &state)?;
         Ok(())
     }

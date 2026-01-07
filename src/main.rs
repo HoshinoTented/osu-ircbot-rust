@@ -7,11 +7,12 @@ mod events;
 
 mod charts;
 
+mod irc_name;
+
 use bot::MyBot;
 use config::get_config;
 use std::env;
 use dotenv::dotenv;
-use crate::charts::ChartDatabase;
 
 // bot设置
 pub struct BotSettings {
